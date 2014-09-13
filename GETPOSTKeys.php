@@ -1,11 +1,6 @@
 <?php
 
-if (file_exists('dbConnect.php'))
-	include_once('dbConnect.php');
-else
-if (file_exists('../dbConnect.php'))
-	include_once('../dbConnect.php');
-
+include_once('dbConnect.php');
 $db = connectToDb();
 
 include_once('getFiles/is_date.php');
