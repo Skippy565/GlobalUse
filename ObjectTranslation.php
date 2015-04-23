@@ -1,83 +1,82 @@
 <?php
 
-include_once(dirname(__FILE__).'/genericObjectClass.php');
-
-class ObjectTranslation extends genericObject
+function buildResponse($Status, $Message, $Data)
 {
+	$retArray = [];
+	$tempArray = [];
+	$tempArray['Status'] = $Status;
+	$tempArray['Message'] = $Message;
+	
+	$retArray['Result'] = $tempArray;
+	$retArray['Data'] = $Data;
+	
+	return $retArray;
+}
 
-	public $FromObject;
-	public $ToObject;
-	public $Translation;
-	public $TranslationProblemArray = array();
-	public $PostMapping = array();
-
-	public function __construct($keyValueArray=array())
+abstract class Util_Service_ObjectTranslation
+{
+	public static function Translate($FromObject, $ToObject, Array $Translation, Array $IncludeFiles = [], Array $PostMapping = [], Array $OverwriteRules = [])
 	{
-		return $this->instantiate($keyValueArray);
-	}
-
-	public function Translate()
-	{
-		if (!$this->FromObject )//|| !is_object($this->FromObject))
+		if (!$FromObject)
 		{
 			$retArray = buildResponse('false', 'No object to translate from', '');
 			return $retArray;
 		}
 
-		if (!$this->ToObject)
+		if (!$ToObject)
 		{
 			$retArray = buildResponse('false', 'To object not instantiated', '');
 			return $retArray;
 		}
 
-		if (count($this->Translation) == 0)
+		if (function_exists('preMap'))
 		{
-			$retArray = buildResponse('false', 'No translation present', '');
-			return $retArray;
+			$ToObject = preMap($FromObject, $ToObject);
 		}
 
-		$DB = new DB();
+		$TranslationProblemArray = [];
 
-		foreach ($this->Translation as $Key=>$Value)
+		foreach ($Translation as $Key=>$Value)
 		{
-			if (is_object($this->ToObject) && is_array($this->FromObject))
+			//check against values
+			if (!self::checkOverwrite($ToObject, $Key, $OverwriteRules))
 			{
-				/*if (! ($this->ToObject->$Value = eval('return $this->FromObject'.$Key.';'))) // works for To object as base object, from object as array
-				{
-					$this->TranslationProblemArray[count($this->TranslationProblemArray)] = 'Problem Translating '.$Key.' to '.$Value;
-				}*/
-				echo "Trying to eval this->ToObject->".$Value." = this->FromObject".$Key." with value ".eval('echo $this->FromObject'.$Key.';')."<BR><BR>";
+				continue;
+			}
+
+			if (is_array($ToObject) && is_array($FromObject))
+			{
 				try
 				{
-					eval ('$this->ToObject'.$Value.'=(is_array($this->FromObject'.$Key.') ? "" : $this->FromObject'.$Key.');');
+					$ToObject[$Value]=$FromObject[$Key];
 				}
-				catch (exception $e)
+				catch (Exception $e)
 				{
-					$this->TranslationProblemArray[count($this->TranslationProblemArray)] = 'Problem Translating '.$Key.' to '.$Value;
+					$TranslationProblemArray[count($TranslationProblemArray)] = 'Problem Translating '.$Key.' to '.$Value . ' of ' . $e->getMessage();
 				}
 			}
 			else
-			if (is_array($this->ToObject) && is_array($this->FromObject)) // not working currently
+			if (is_object($ToObject) && is_array($FromObject))
 			{
-				try
+				try 
 				{
-					eval ('$this->ToObject'.$Value.'=$this->FromObject'.$Key.';');
+					$ToObject->__set($Value, $FromObject[$Key]);
 				}
-				catch (exception $e)
+				catch (Exception $e)
 				{
-					$this->TranslationProblemArray[count($this->TranslationProblemArray)] = 'Problem Translating '.$Key.' to '.$Value;
+					$TranslationProblemArray[count($TranslationProblemArray)] = 'Problem Translating ' . $Key . ' to ' . $Value . ' of ' . $e->getMessage();
 				}
 			}
 			else
-			if (is_object($this->ToObject) && is_object($this->FromObject))
+			if (is_array($ToObject) && is_object($FromObject))
 			{
-				try
+				try 
 				{
-					eval ('$this->ToObject->'.$Value.'=$this->FromObject->'.$Key.';');
+					$ToObject[$Value] = $FromObject->__get($Key);
 				}
-				catch (exception $e)
+				catch (Exception $e)
 				{
-					$this->TranslationProblemArray[count($this->TranslationProblemArray)] = 'Problem Translating '.$Key.' to '.$Value;
+					$TranslationProblemArray[count($TranslationProblemArray)] = 'Problem Translating ' . $Key . ' to ' . $Value . ' of ' . $e->getMessage();
 				}
 			}
 			else
@@ -87,50 +86,112 @@ class ObjectTranslation extends genericObject
 			}
 		}
 
-		$DB->Close();
-
-		if (count($this->TranslationProblemArray) == 0)
+		if (count($TranslationProblemArray) == 0)
 		{
-			$retArray = buildResponse('true', 'Object translated', $this->ToObject);
+			$retArray = self::PostProcessMapping($FromObject, $ToObject, $IncludeFiles, $PostMapping);
 		}
 		else
 		{
-			$retArray = buildResponse('false', 'Problem with translation', $this->TranslationProblemArray);
+			$retArray = buildResponse('false', 'Problem with translation', $TranslationProblemArray);
 		}
 		return $retArray;
 	}
 
-	public function PostProcessMapping()
+	public static function PostProcessMapping($FromObject, $ToObject, Array $IncludeFiles = [], Array $PostMapping = [], Array $OverwriteRules = [])
 	{
-		if (count($this->PostMapping) == 0)
+		if (count($PostMapping) == 0)
 		{
-			$retArray = buildResponse('false', 'No post processing mapping', '');
+			$retArray = buildResponse('true', 'No post processing mapping', $ToObject);
 			return $retArray;
 		}
 
-		$this->TranslationProblemArray = array();
-
-		foreach ($this->PostMapping as $key=>$value)
+		for ($i=0;$i<count($IncludeFiles);$i++)
 		{
-			try
+			include_once($IncludeFiles[$i]);
+		}
+
+		$TranslationProblemArray = array();
+
+		foreach ($PostMapping as $key=>$value)
+		{
+			if (is_array($ToObject) && is_array($FromObject))
 			{
-				eval ('$this->ToObject'.$key.'='.$value.'($this->ToObject'.$key.');');
+				try
+				{
+					$ToObject[$key]=$value($FromObject);
+				}
+				catch (Exception $e)
+				{
+					$TranslationProblemArray[count($TranslationProblemArray)] = 'ToObject'.$key.'='.$value.'(ToObject'.$key.') of ' . $e->getMessage();
+				}
 			}
-			catch (exception $e)
+			else
+			if (is_object($ToObject) && is_array($FromObject))
 			{
-				$this->TranslationProblemArray[count($this->TranslationProblemArray)] = 'this->ToObject'.$key.'='.$value.'(this->ToObject'.$key.');';
+				try
+				{
+					$ToObject->__set($key, $value($FromObject));
+				}
+				catch (Exception $e)
+				{
+					$TranslationProblemArray[count($TranslationProblemArray)] = 'ToObject->__set('.$key.', '.$value.'(FromObject)) of ' . $e->getMessage();
+				}
+			}
+			else
+			if (is_array($ToObject) && is_object($FromObject))
+			{
+				try
+				{
+					$ToObject[$key] = $value($FromObject);
+				}
+				catch (Exception $e)
+				{
+					$TranslationProblemArray[count($TranslationProblemArray)] = 'ToObject['.$key.'] = '.$value.'(FromObject) of ' . $e->getMessage();
+				}
 			}
 		}
 
-		if (count($this->TranslationProblemArray) > 0)
+		if (count($TranslationProblemArray) > 0)
 		{
-			$retArray = buildResponse('false', 'Problem mapping', $this->TranslationProblemArray);
+			$retArray = buildResponse('false', 'Problem mapping', $TranslationProblemArray);
 		}
 		else
 		{
-			$retArray = buildResponse('true', 'Mapped', $this->ToObject);
+			if (function_exists('postMap'))
+			{
+				$ToObject = postMap($FromObject, $ToObject);
+			}
+			$retArray = buildResponse('true', 'Mapped', $ToObject);
 		}
 
 		return $retArray;
+	}
+
+	//checks overwrite flag + also checks against overwrite values
+	public static function checkOverwrite($ToObject, $key, Array $OverwriteRules = [])
+	{
+		//case where always overwrite the value
+		if (isset($OverwriteRules['Keys']) && isset($OverwriteRules['Keys'][$key]))
+			return true;
+
+		if (is_array($ToObject))
+		{
+			if (isset($OverwriteRules['Values']) && !in_array($ToObject[$key], $OverwriteRules['Values']))
+				return false;
+			else
+				return true;
+		}
+		else
+		if (is_object($ToObject))
+		{
+			if (isset($OverwriteRules['Value']) && !in_array($ToObject->__get($key), $OverwriteRules['Values']))
+				return false;
+			else
+				return true;
+		}
+		else //unsupported type
+		{
+			return true;
+		}
 	}
 }
